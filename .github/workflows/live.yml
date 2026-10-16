@@ -1,0 +1,159 @@
+# whatiiif: template only.
+# Main is production. Keeps everything outside this repository in step with it, and checks it on real GitHub, after
+# every push to main (whatever it changed), each release, and every day (GitHub itself changes too):
+# - demo: pushes the template to each demo repository, named by the DEMO_REPOSITORY variable (the plain demo) and
+#   NOTES_DEMO_REPOSITORY (the one with notes and a tour), whose own Deploy workflows publish it to GitHub Pages, then
+#   checks the live sites. Each is pushed to with a deploy key for it alone.
+# - screenshots: once both demos are up, remakes the README's screenshots of them on a Mac and commits any that look
+#   different to main.
+# - release: first, releases engine/VERSION if it is not released yet: merging a new version releases it
+#   (.github/release.sh).
+# - released: fails unless everything sites get on main is in the release of engine/VERSION, and the tag sites call
+#   the shared steps at (v1 for 1.x) points at it.
+# The trials in new repositories made from the template (engine/test/live) are run by hand, with `npm run test:live`:
+# see docs/DEVELOPING.md. Releasing is the template's: in a copy of it, which is not a template and has no DEMO_REPOSITORY,
+# nothing here runs.
+name: Live
+
+on:
+  push:
+    branches: [main]
+  release:
+    types: [published]
+  schedule:
+    - cron: '23 4 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: live
+
+jobs:
+  release:
+    # Before anything else here, so the demos and the checks see the release.
+    if: github.event.repository.is_template
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      pull-requests: read # the release's words are its pull request's
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event_name == 'release' && 'main' || '' }} # a release made by hand: still main
+          fetch-depth: 0 # and the tags
+      - name: Release engine/VERSION, if it is not released yet
+        run: bash .github/release.sh release
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+  demo:
+    needs: release
+    if: vars.DEMO_REPOSITORY != ''
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        demo:
+          - { repository: DEMO_REPOSITORY, key: DEMO_DEPLOY_KEY }
+          - { repository: NOTES_DEMO_REPOSITORY, key: NOTES_DEMO_DEPLOY_KEY }
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event_name == 'release' && 'main' || '' }} # a release made by hand: still main
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: engine/.node-version
+          cache: npm
+      - name: Publish this commit through the demo's own Deploy workflow
+        if: vars[matrix.demo.repository] != ''
+        id: demo
+        shell: bash # with pipefail, so a failure is not hidden by tee
+        run: |
+          mkdir -p ~/.ssh
+          gh api meta --jq '.ssh_keys[] | "github.com " + .' >> ~/.ssh/known_hosts
+          eval "$(ssh-agent -s)"
+          ssh-add - <<< "$DEMO_DEPLOY_KEY"
+          engine/test/live/deploy-demo.sh "$DEMO_REPOSITORY" | tee demo.log
+          echo "url=$(tail -1 demo.log)" >> "$GITHUB_OUTPUT"
+        env:
+          DEMO_REPOSITORY: ${{ vars[matrix.demo.repository] }}
+          DEMO_DEPLOY_KEY: ${{ secrets[matrix.demo.key] }}
+          GH_TOKEN: ${{ github.token }}
+      - name: Check the live site
+        if: steps.demo.outcome == 'success'
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium-headless-shell
+          node --test engine/test/e2e/check-site.js
+        env:
+          E2E_SITE_URL: ${{ steps.demo.outputs.url }}
+
+  released:
+    needs: release
+    if: github.event.repository.is_template
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event_name == 'release' && 'main' || '' }} # a release made by hand: still main
+          fetch-depth: 0 # and the tags
+      - name: Check that everything sites get on main is released
+        run: bash .github/release.sh released
+        env:
+          GH_TOKEN: ${{ github.token }} # to ask for the GitHub release, which is what copies are offered
+
+  screenshots:
+    needs: demo
+    if: vars.DEMO_REPOSITORY != ''
+    runs-on: macos-15 # the README's screenshots are a Mac's, as most people reading it will see the page
+    permissions:
+      contents: write
+      statuses: write # to mark its commit as having passed the Version check, which main requires
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event_name == 'release' && 'main' || '' }} # a release made by hand: still main
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: engine/.node-version
+          cache: npm
+      - name: Remake the README's screenshots of the demos
+        run: |
+          npm ci
+          npx playwright install chromium-headless-shell
+          node engine/test/support/readme-screenshots.js
+        env:
+          GH_TOKEN: ${{ github.token }} # to list the demos' content/
+      - name: Commit any that look different
+        run: |
+          git add engine/artwork
+          if git diff --cached --quiet; then
+            echo "The README's screenshots are up to date."
+            exit 0
+          fi
+          git -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+            commit -q -m "README screenshots, remade from the demos at $(git rev-parse --short=7 HEAD)"
+          # main may have moved on while this ran; the screenshots are the only change, so they go on top of it.
+          # main takes only commits that have passed the Version check (a ruleset), which GitHub runs for no push a
+          # workflow makes with its own token: so it is run here, on the commit, given to GitHub first on a branch of
+          # its own, and the commit marked as having passed it.
+          for attempt in 1 2 3; do
+            if git fetch -q origin main && git rebase -q origin/main; then
+              bash .github/release.sh check origin/main # the screenshots change nothing sites get
+              git push -q -f origin HEAD:refs/heads/readme-screenshots
+              gh api "repos/$GITHUB_REPOSITORY/statuses/$(git rev-parse HEAD)" -f state=success -f context=version \
+                -f description="Nothing sites get changes: run by Live, which made this commit" > /dev/null
+              if git push -q origin HEAD:main; then
+                git push -q origin :refs/heads/readme-screenshots
+                exit 0
+              fi
+            fi
+            sleep 10
+          done
+          git push -q origin :refs/heads/readme-screenshots || true
+          echo "::error title=The README's screenshots were not committed::main kept moving; run Live again."
+          exit 1
+        env:
+          GH_TOKEN: ${{ github.token }} # to mark the commit as checked
