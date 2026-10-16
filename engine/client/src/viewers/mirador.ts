@@ -2,7 +2,6 @@ import Mirador from 'mirador';
 import type { ViewerAdapter } from './types';
 import type { Region } from '../address';
 import { darkPage, pageColour } from '../colours';
-import { motion } from './motion';
 
 interface ViewerState {
   x: number;
@@ -78,7 +77,6 @@ const adapter: ViewerAdapter = {
         sideBarOpen: Boolean(site.notes && onNote) && el.clientWidth >= ROOM_FOR_NOTES,
         defaultSideBarPanel: 'annotations',
       },
-      osdConfig: motion(), // added to Mirador's own options for OpenSeadragon
       workspace: { isWorkspaceAddVisible: false },
       workspaceControlPanel: { enabled: false },
       ...theme(),

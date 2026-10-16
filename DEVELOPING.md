@@ -56,9 +56,6 @@ as well as in `engine/UPSTREAM`.
 
 ## Working on it
 
-The documents: the [README](../README.md), the manual for people with a site; and in `docs/`, this page, the
-[Quickstart](QUICKSTART.md), and [WhatIIIF for LLMs](FOR-LLMS.md), for coding assistants making a site for someone.
-
 Needs Node 24 or newer.
 
 ```sh
@@ -74,14 +71,13 @@ npm run test:visual  # the page against reviewed screenshots
 
 `engine/test/` holds:
 
-- `*.test.js`, run by `npm test`: the engine, the page's own logic (Node runs its TypeScript as it is), the
-  workflows' scripts in `engine/ci/` and `.github/release.sh`, run against a stand-in for GitHub's `gh`, and the
-  documents (`docs.test.js`): every link between the README and `docs/`, and to a heading in one, goes somewhere.
+- `*.test.js`, run by `npm test`: the engine, the page's own logic (Node runs its TypeScript as it is), and the
+  workflows' scripts in `engine/ci/`, run against a stand-in for GitHub's `gh`.
 - `e2e/`: repositories made from the template, with images committed the way people commit them: uploaded on
   github.com, through Git LFS, in two languages, and with mistakes. Each runs what the Deploy workflow runs and opens
   the site in both viewers, failing if either asks for a file that was not published. They run in Chromium;
   `safari.e2e.js` repeats the journeys most likely to differ in WebKit, on a Mac and on an iPhone, and
-  `accessibility.e2e.js` checks every state of the page against WCAG 2.2 AA with axe. `check-site.js` checks any
+  `accessibility.e2e.js` checks every state of the page against WCAG 2.1 AA with axe. `check-site.js` checks any
   built or live site the same way.
 - `visual/`: the page, in each state a visitor can meet, against reviewed screenshots in
   `engine/test/visual/screenshots` (one set per operating system, since fonts differ; CI checks the Linux set). After
@@ -117,11 +113,9 @@ day. Copies of the template have no
   tried by the live trials, by hand. It pushes with a deploy key for each demo alone, stored as the
   `DEMO_DEPLOY_KEY` and `NOTES_DEMO_DEPLOY_KEY` secrets.
 - **screenshots:** once both demos are up, remakes the README's screenshots of them on a Mac
-  (`engine/test/support/readme-screenshots.js`) and commits to `main` any that look different, having passed the
-  Version check on that commit, which `main` requires (see Releasing). Pull before working.
-- **release:** runs first, and releases `engine/VERSION` if it is not released yet (see Releasing).
-- **released:** fails if `main` holds a change to what sites get that no release includes, or the tag sites call the
-  shared steps at (`v1` for 1.x) is not on the latest release.
+  (`engine/test/support/readme-screenshots.js`) and commits to `main` any that look different. Pull before working.
+- **released:** fails if the shared steps on `main` (`publish.yml`, `offer-update.yml`) are not those at the tag sites
+  call them at (`v1` for 1.x): sites do not have them until a release moves that tag, so a release is due.
 The trials in repositories made from the template are run by hand, not by Live: `npm run test:live` makes public
 repositories with "Use this template" and tries the template in them as a newcomer would. Run them before every
 release, and after any change to the workflows or to what they run (the build, Deploy, Update), once it is on `main`
@@ -140,39 +134,11 @@ names the repository to delete by hand. The trials:
 
 ## Releasing
 
-`main` is production, and the version in `engine/VERSION` is the one thing anyone changes to release:
-
-1. A pull request that changes what sites get raises `engine/VERSION`, by semantic versioning: a fix 1.1.0 → 1.1.1,
-   something new 1.1.0 → 1.2.0. What sites get is `engine/` but for its tests and the README's pictures; `content/`
-   and `.gitignore`, which a new site starts with; the packages sites install (not `devDependencies`, which
-   `npm ci --omit=dev` leaves out); `.gitattributes`; and the four workflows sites run. The **Version** check fails
-   until it does. A pull request that changes nothing sites get (the README, tests, the template's own workflows)
-   needs no new version.
-2. Its description becomes the release's notes, so write it for the people who use WhatIIIF. A pull request from
-   Dependabot, or a version pushed to `main` without one, gets GitHub's own list of what changed instead.
-3. Merging it releases that version: Live's first job makes the tag `vX.Y.Z` and the GitHub release "WhatIIIF X.Y.Z"
-   at the commit the pull request left `main` at, however it was merged, and moves the tag of its major version (`v1`
-   for 1.x) to it, which every copy calls the shared steps at, unless that tag is on a later release already. A
-   version with a hyphen (1.2.0-rc.1) is released as a pre-release and moves nothing. Versions merged before Live
-   runs are each released, oldest first, and a run that stops half way is finished by the next.
-4. Live then fails if `main` ever holds a change to what sites get that no release includes, if `engine/VERSION`
-   has no GitHub release (a tag alone is not offered to copies), or if the major version's tag is not on the latest
-   release.
-
-All of it is `.github/release.sh`. Run `npm run test:live` by hand before merging a new version, and the update
-trial after. The weekly dependency update raises the patch number itself when the packages sites install change, and
-puts what whoever merges it needs to know in a comment, as its description becomes the release's notes.
-`release.yml` moves the major version's tag for a release made by hand, which should not be needed, by the same rule:
-never back from a later release, so a fix to an older line (1.1.2 after 1.2.0) leaves sites on the latest.
-
-`main` has a ruleset: it takes a commit only once the **Version** check has passed on it, on a branch up to date with
-`main`. So two pull requests that each raise `engine/VERSION` to the same number cannot both be merged: the second
-must be brought up to date first, and its check then fails. Bring a pull request up to date with **Update branch**, or
-`gh pr update-branch`. Live's screenshots job runs the check itself on the commit it pushes, as GitHub runs no
-workflow for a push a workflow makes.
-
 Copies of the template update themselves from the repository named in `engine/UPSTREAM`
-(`.github/workflows/update.yml` and `engine/ci/update.sh`). An update replaces `engine/`, `package.json` and
-`package-lock.json` only, and is never offered to a copy already on that version or a later one. GitHub does not let
-the workflow change workflow files, so users copy those by hand; the pull request says when they need to, leaving
-out any workflow marked `# whatiiif: template only` (and `ci.yml` and `live.yml`, from before there was a marker).
+(`.github/workflows/update.yml` and `engine/ci/update.sh`). To release, bump `engine/VERSION` and publish a GitHub
+release tagged `vX.Y.Z`; `release.yml` then moves the tag of its major version to it (`v0` for 0.x, `v1` for 1.x;
+a pre-release leaves it where it is), and every copy calling that tag runs its steps from then on. Run
+`npm run test:live` by hand before and after releasing (see above). An update replaces `engine/`, `package.json` and `package-lock.json` only, and is
+never offered to a copy already on that version or a later one. GitHub does not let the workflow change workflow
+files, so users copy those by hand; the pull request says when they need to, leaving out any workflow marked
+`# whatiiif: template only` (and `ci.yml` and `live.yml`, from before there was a marker).
